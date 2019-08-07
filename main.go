@@ -166,8 +166,7 @@ func main() {
 	router.GET("/users/:id/visits", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		id, _ := strconv.Atoi(ps.ByName("id"))
 
-		user, found := users[id]
-		if !found {
+		if _, found := users[id]; !found {
 			http.NotFound(w, r)
 			return
 		}
@@ -213,7 +212,20 @@ func main() {
 			toDistance = &x
 		}
 
-		resp := make([]visit, 0)
+		resp := make([]struct {
+			Mark      int    `json:"mark"`
+			VisitedAt int    `json:"visited_at"`
+			Place     string `json:"place"`
+		}, 0)
+
+		for _, user := range users {
+			if fromDate != nil {
+
+			}
+		}
+
+		b, _ := json.Marshal(resp)
+		w.Write(b)
 	})
 
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), router))
