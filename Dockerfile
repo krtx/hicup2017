@@ -1,6 +1,6 @@
 FROM golang:1.12-alpine as build
 
-RUN apk add git
+RUN apk add --update git gcc musl-dev
 
 RUN mkdir /app
 
@@ -12,7 +12,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o server
+RUN go build -a -tags netgo -installsuffix netgo --ldflags '-extldflags "-static"' -o server
 
 FROM scratch
 
