@@ -12,6 +12,13 @@ RUN go mod download
 
 COPY . .
 
+# RUN CGO_ENABLED=0 go build -o server
+
+# ENV PORT=80
+# ENV ARCHIVE_PATH=/tmp/data/data.zip
+
+# CMD [ "/app/server" ]
+
 RUN go build -a -tags netgo -installsuffix netgo --ldflags '-extldflags "-static"' -o server
 
 FROM scratch

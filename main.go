@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -15,10 +17,6 @@ import (
 	"github.com/julienschmidt/httprouter"
 	_ "github.com/mattn/go-sqlite3"
 )
-
-// type usersType struct {
-// 	Users []user `json:"users"`
-// }
 
 type user struct {
 	ID        int    `json:"id"`
@@ -29,12 +27,6 @@ type user struct {
 	BirthDate int64  `json:"birth_date"`
 }
 
-// var users map[int]user
-
-// type locationsType struct {
-// 	Locations []location `json:"locations"`
-// }
-
 type location struct {
 	ID       int    `json:"id"`
 	Place    string `json:"place"`
@@ -42,12 +34,6 @@ type location struct {
 	City     string `json:"city"`
 	Distance int    `json:"distance"`
 }
-
-// var locations map[int]location
-
-// type visitsType struct {
-// 	Visits []visit `json:"visits"`
-// }
 
 type visit struct {
 	ID        int `json:"id"`
@@ -57,19 +43,14 @@ type visit struct {
 	Mark      int `json:"mark"`
 }
 
-// var visits map[int]visit
+const driver = "sqlite3"
 
-const dsn = "file::memory:?cache=shared"
+const dsn = "file:test.db?mode=memory&cache=shared"
 
-// const dsn = "file:test.db?mode=memory&cache=shared"
 // const dsn = "file:test.db?cache=shared"
 
 func init() {
-	// users = make(map[int]user, 0)
-	// locations = make(map[int]location, 0)
-	// visits = make(map[int]visit, 0)
-
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		panic(err)
 	}
@@ -85,6 +66,8 @@ func init() {
 	)
 	`)
 
+	db.Exec(`create index users_id on users (id)`)
+
 	db.Exec(`
 	create table locations (
 		id integer,
@@ -95,6 +78,8 @@ func init() {
 	)
 	`)
 
+	db.Exec(`create index locations_id on locations (id)`)
+
 	db.Exec(`
 	create table visits (
 		id integer,
@@ -104,6 +89,21 @@ func init() {
 		mark integer
 	)
 	`)
+
+	db.Exec(`create index visits_location_user on visits (location, user)`)
+}
+
+func getIntValue(v url.Values, name string) (*int, error) {
+	if len(v[name]) == 0 {
+		return nil, nil
+	}
+
+	x, err := strconv.Atoi(v[name][0])
+	if err != nil {
+		return nil, err
+	}
+
+	return &x, nil
 }
 
 func loadData(archivePath string) error {
@@ -113,7 +113,7 @@ func loadData(archivePath string) error {
 	}
 	defer r.Close()
 
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return err
 	}
@@ -177,9 +177,9 @@ func loadData(archivePath string) error {
 }
 
 func main() {
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+	// go func() {
+	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
+	// }()
 
 	err := loadData(os.Getenv("ARCHIVE_PATH"))
 	if err != nil {
@@ -190,11 +190,22 @@ func main() {
 
 	router := httprouter.New()
 
+	router.PanicHandler = func(w http.ResponseWriter, r *http.Request, err interface{}) {
+		log.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
 	router.GET("/users/:id", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
 		id := ps.ByName("id")
-		db, _ := sql.Open("sqlite3", dsn)
+
 		var u user
-		err := db.QueryRow("SELECT id, email, first_name, last_name, gender, birth_date FROM users WHERE id = ?", id).Scan(&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.Gender, &u.BirthDate)
+		err = db.QueryRow("SELECT id, email, first_name, last_name, gender, birth_date FROM users WHERE id = ?", id).Scan(&u.ID, &u.Email, &u.FirstName, &u.LastName, &u.Gender, &u.BirthDate)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -205,10 +216,16 @@ func main() {
 	})
 
 	router.GET("/locations/:id", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
 		id := ps.ByName("id")
-		db, _ := sql.Open("sqlite3", dsn)
+
 		var l location
-		err := db.QueryRow("SELECT id, place, country, city, distance FROM locations WHERE id = ?", id).Scan(&l.ID, &l.Place, &l.Country, &l.City, &l.Distance)
+		err = db.QueryRow("SELECT id, place, country, city, distance FROM locations WHERE id = ?", id).Scan(&l.ID, &l.Place, &l.Country, &l.City, &l.Distance)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -219,10 +236,16 @@ func main() {
 	})
 
 	router.GET("/visits/:id", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
 		id := ps.ByName("id")
-		db, _ := sql.Open("sqlite3", dsn)
+
 		var v visit
-		err := db.QueryRow("SELECT id, location, user, visited_at, mark FROM visits WHERE id = ?", id).Scan(&v.ID, &v.Location, &v.User, &v.VisitedAt, &v.Mark)
+		err = db.QueryRow("SELECT id, location, user, visited_at, mark FROM visits WHERE id = ?", id).Scan(&v.ID, &v.Location, &v.User, &v.VisitedAt, &v.Mark)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -237,42 +260,33 @@ func main() {
 
 		q := r.URL.Query()
 
-		db, err := sql.Open("sqlite3", dsn)
-		if err != nil {
-			log.Println(err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		sql := "select visits.mark, visits.visited_at, locations.place from visits join locations on visits.location = locations.id where visits.user = ? "
+		query := "select visits.mark, visits.visited_at, locations.place from visits join locations on visits.location = locations.id where visits.user = ? "
 
 		args := make([]interface{}, 1)
 		args[0] = id
 
-		if len(q["fromDate"]) > 0 {
-			fromDate, err := strconv.Atoi(q.Get("fromDate"))
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			sql += "and visits.visited_at > ?"
-			args = append(args, fromDate)
+		fromDate, err := getIntValue(q, "fromDate")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if fromDate != nil {
+			query += "and visits.visited_at > ?"
+			args = append(args, *fromDate)
 		}
 
-		if len(q["toDate"]) > 0 {
-			toDate, err := strconv.Atoi(q.Get("toDate"))
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			sql += "and visits.visited_at < ?"
+		toDate, err := getIntValue(q, "toDate")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if toDate != nil {
+			query += "and visits.visited_at < ?"
 			args = append(args, toDate)
 		}
 
 		if len(q["country"]) > 0 {
-			sql += "and locations.country = ?"
+			query += "and locations.country = ?"
 			args = append(args, q.Get("country"))
 		}
 
@@ -283,11 +297,17 @@ func main() {
 				return
 			}
 
-			sql += "and distance < ?"
+			query += "and distance < ?"
 			args = append(args, toDistance)
 		}
 
-		rows, err := db.Query(sql, args...)
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
+		rows, err := db.Query(query, args...)
 		if err != nil {
 			log.Println(err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -307,9 +327,7 @@ func main() {
 			var visitedAt int
 			var place string
 			if err = rows.Scan(&mark, &visitedAt, &place); err != nil {
-				log.Println(err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
+				panic(err)
 			}
 
 			res = append(res, result{mark, visitedAt, place})
@@ -319,64 +337,155 @@ func main() {
 		w.Write(b)
 	})
 
-	// router.GET("/users/:id/visits", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	// 	id, _ := strconv.Atoi(ps.ByName("id"))
+	router.GET("/locations/:id/avg", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		id := ps.ByName("id")
 
-	// 	if _, found := users[id]; !found {
-	// 		http.NotFound(w, r)
-	// 		return
-	// 	}
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
 
-	// 	q := r.URL.Query()
+		var count int
+		err = db.QueryRow("SELECT id FROM locations WHERE id = ?", id).Scan(&count)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 
-	// 	var fromDate *int
-	// 	var toDate *int
-	// 	var country *string
-	// 	var toDistance *int
+		q := r.URL.Query()
 
-	// 	if len(q["fromDate"]) > 0 {
-	// 		x, err := strconv.Atoi(q["fromDate"][0])
-	// 		if err != nil {
-	// 			w.WriteHeader(http.StatusBadRequest)
-	// 		}
-	// 		return
+		query := "SELECT SUM(visits.mark), COUNT(1) FROM visits JOIN users ON users.id = visits.user WHERE visits.location = ? "
 
-	// 		fromDate = &x
-	// 	}
+		args := make([]interface{}, 1)
+		args[0] = id
 
-	// 	if len(q["toDate"]) > 0 {
-	// 		x, err := strconv.Atoi(q["toDate"][0])
-	// 		if err != nil {
-	// 			w.WriteHeader(http.StatusBadRequest)
-	// 		}
-	// 		return
+		fromDate, err := getIntValue(q, "fromDate")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if fromDate != nil {
+			query += "AND visits.visited_at > ?"
+			args = append(args, *fromDate)
+		}
 
-	// 		toDate = &x
-	// 	}
+		toDate, err := getIntValue(q, "toDate")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if toDate != nil {
+			query += "AND visits.visited_at < ?"
+			args = append(args, toDate)
+		}
 
-	// 	if len(q["country"]) > 0 {
-	// 		country = &q["country"][0]
-	// 	}
+		if len(q["gender"]) > 0 {
+			query += "AND users.gender = ?"
+			args = append(args, q.Get("gender"))
+		}
 
-	// 	if len(q["toDistance"]) > 0 {
-	// 		x, err := strconv.Atoi(q["toDistance"][0])
-	// 		if err != nil {
-	// 			w.WriteHeader(http.StatusBadRequest)
-	// 		}
-	// 		return
+		fromAge, err := getIntValue(q, "fromAge")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if fromAge != nil {
+			query += "AND users.age > ?"
+			args = append(args, fromAge)
+		}
 
-	// 		toDistance = &x
-	// 	}
+		toAge, err := getIntValue(q, "toAge")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if fromAge != nil {
+			query += "AND users.age < ?"
+			args = append(args, toAge)
+		}
 
-	// 	resp := make([]struct {
-	// 		Mark      int    `json:"mark"`
-	// 		VisitedAt int    `json:"visited_at"`
-	// 		Place     string `json:"place"`
-	// 	}, 0)
+		var sum int
+		err = db.QueryRow(query, args...).Scan(&sum, &count)
+		if err != nil {
+			panic(err)
+		}
 
-	// 	b, _ := json.Marshal(resp)
-	// 	w.Write(b)
-	// })
+		fmt.Fprintf(w, "{\"avg\":%.5f}", float64(sum)/float64(count))
+	})
+
+	router.POST("/:entity/:id", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		entity := ps.ByName("entity")
+		id := ps.ByName("id")
+
+		if entity != "locations" && entity != "users" && entity != "visits" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			panic(err)
+		}
+		defer db.Close()
+
+		b, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			panic(err)
+		}
+
+		if id == "new" {
+			if entity == "users" {
+				var u user
+				if err = json.Unmarshal(b, &u); err != nil {
+					panic(err)
+				}
+				db.QueryRow("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", u.ID, u.Email, u.FirstName, u.LastName, u.Gender, u.BirthDate)
+			} else if entity == "locations" {
+				var u location
+				if err = json.Unmarshal(b, &u); err != nil {
+					panic(err)
+				}
+				db.QueryRow("INSERT INTO locations VALUES (?, ?, ?, ?, ?)", u.ID, u.Place, u.Country, u.City, u.Distance)
+			} else if entity == "visits" {
+				var u visit
+				if err = json.Unmarshal(b, &u); err != nil {
+					panic(err)
+				}
+				db.QueryRow("INSERT INTO visits VALUES (?, ?, ?, ?, ?)", u.ID, u.Location, u.User, u.VisitedAt, u.Mark)
+			}
+			fmt.Fprintf(w, "{}")
+			return
+		}
+
+		var v int
+		err = db.QueryRow(fmt.Sprintf("SELECT id FROM %s WHERE id = ?", entity), id).Scan(&v)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if entity == "users" {
+			var u user
+			if err = json.Unmarshal(b, &u); err != nil {
+				panic(err)
+			}
+			db.QueryRow("UPDATE users SET email = ?, first_name = ?, last_name = ?, birth_date = ? WHERE id = ?", u.Email, u.FirstName, u.LastName, u.BirthDate, id)
+		} else if entity == "locations" {
+			var u location
+			if err = json.Unmarshal(b, &u); err != nil {
+				panic(err)
+			}
+			db.QueryRow("UPDATE locations SET place = ?, country = ?, city = ?, distance = ? WHERE id = ?", u.Place, u.Country, u.City, u.Distance, id)
+		} else if entity == "visits" {
+			var u visit
+			if err = json.Unmarshal(b, &u); err != nil {
+				panic(err)
+			}
+			db.QueryRow("UPDATE visits SET loation = ?, user = ?, visited_at = ?, mark = ? WHERE id = ?", u.Location, u.User, u.VisitedAt, u.Mark, id)
+		}
+		fmt.Fprintf(w, "{}")
+	})
 
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), router))
 }
